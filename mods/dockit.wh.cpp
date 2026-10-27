@@ -1010,3 +1010,76 @@ void RunUI() {
 }
 
 } // namespace
+
+BOOL WhTool_ModInit() {
+    g_unloading.store(false);
+    g_entryState.store(0);
+    g_stopEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!g_stopEvent) return FALSE;
+    g_uiExitedEvent = CreateEventW(nullptr, TRUE, FALSE, nullptr);
+    if (!g_uiExitedEvent) {
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+        return FALSE;
+    }
+    Wh_Log(L"DockIt tool host initialized, PID=%lu", GetCurrentProcessId());
+    return TRUE;
+}
+
+void WhTool_ModEntryPoint() {
+    int expected = 0;
+    if (!g_entryState.compare_exchange_strong(expected, 1)) {
+        // Unload won the startup race; there is no UI to tear down.
+        return;
+    }
+    Wh_Log(L"DockIt UI main thread TID=%lu", GetCurrentThreadId());
+    RunUI();
+    SetEvent(g_uiExitedEvent);
+    g_entryState.store(3, std::memory_order_release);
+}
+
+void WhTool_ModSettingsChanged() {
+    if (g_unloading.load(std::memory_order_acquire)) return;
+    // No UI exists during compilation. This callback runs only after loading.
+    // Never update Win32 controls or embedded windows from this callback thread.
+    g_settingsDirty.store(true);
+    if (HWND hwnd = g_main.load()) {
+        PostMessageW(hwnd, kReloadSettings, 0, 0);
+    }
+}
+
+void WhTool_ModUninit() {
+    // Exact Windhawk 2.0 callback name: WhTool_ModUninit (case-sensitive).
+    // Do not return while a DockIt UI/window procedure executes mod code.
+    g_unloading.store(true, std::memory_order_release);
+    if (g_stopEvent) SetEvent(g_stopEvent);
+    // Optional fast path; event-aware message loop is the guaranteed wakeup.
+    if (HWND h = g_main.load()) PostMessageW(h, WM_CLOSE, 0, 0);
+
+    int expectedState = 0;
+    bool cancelledBeforeEntry =
+        g_entryState.compare_exchange_strong(expectedState, 2);
+    if (g_uiExitedEvent && !cancelledBeforeEntry) {
+        // The host-owned entry-point/UI thread restores the embedded HWND,
+        // destroys its windows, unregisters classes, and shuts down GDI+
+        // BEFORE signaling g_uiExitedEvent. It starts no worker threads.
+        // NEVER use a timeout here: returning early would unload the DLL
+        // while its UI thread/window proc might still execute in it.
+        DWORD result = WaitForSingleObject(g_uiExitedEvent, INFINITE);
+        if (result != WAIT_OBJECT_0) {
+            // Fatal invariant violation: never return to Windhawk with
+            // a potentially live thread executing mod code.
+            Wh_Log(L"DockIt UI exit wait failed: %lu", GetLastError());
+            RaiseFailFastException(nullptr, nullptr, 0);
+        }
+    }
+    if (g_uiExitedEvent) {
+        CloseHandle(g_uiExitedEvent);
+        g_uiExitedEvent = nullptr;
+    }
+    // The UI has exited (or never started); no worker threads exist.
+    if (g_stopEvent) {
+        CloseHandle(g_stopEvent);
+        g_stopEvent = nullptr;
+    }
+}
