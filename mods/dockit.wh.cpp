@@ -2,7 +2,7 @@
 // @id              dockit
 // @name            DockIt
 // @description     DockIt window capture, cropping, attachment, title-bar auto-hide and restoration
-// @version         0.5.4
+// @version         0.5.5
 // @author          Local
 // @include         windhawk.exe
 // @include         windhawk-mod-uiaccess.exe
@@ -643,7 +643,7 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         }
         PaintLabel(g, L"DRAG TO SELECT CROP  |  Right click / Esc to cancel",
                  Gdiplus::RectF(10, 8,
-                 static_cast<float>(std::max(20,bounds.right-20)), 34), 13, true);
+                 static_cast<float>(std::max(20, static_cast<int>(bounds.right-20))), 34), 13, true);
         EndPaint(hwnd, &ps);
         return 0;
     }
@@ -763,8 +763,8 @@ void HandlePulse() {
                     g_targetPid = pid;
                     RECT r{};
                     GetWindowRect(foreground, &r);
-                    g_targetW = std::max(100, r.right-r.left);
-                    g_targetH = std::max(100, r.bottom-r.top);
+                    g_targetW = std::max(100, static_cast<int>(r.right-r.left));
+                    g_targetH = std::max(100, static_cast<int>(r.bottom-r.top));
                     g_cropX = g_cropY = 0;
                     g_viewW = std::clamp(g_targetW, kViewMinimumW, kViewMaximumW);
                     g_viewH = std::clamp(g_targetH, kViewMinimumH, kViewMaximumH);
@@ -871,9 +871,9 @@ LRESULT CALLBACK MainWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     case WM_MOUSEMOVE:
         if (g_resizingGrip) {
             POINT p{GET_X_LPARAM(lp), GET_Y_LPARAM(lp)};
-            g_viewW = std::clamp(g_startW + p.x-g_resizeStart.x,
+            g_viewW = std::clamp(g_startW + static_cast<int>(p.x-g_resizeStart.x),
                                  kViewMinimumW, kViewMaximumW);
-            g_viewH = std::clamp(g_startH + p.y-g_resizeStart.y,
+            g_viewH = std::clamp(g_startH + static_cast<int>(p.y-g_resizeStart.y),
                                  kViewMinimumH, kViewMaximumH);
                     ResizeMain();
         }
