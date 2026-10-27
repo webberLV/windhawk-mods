@@ -102,7 +102,7 @@ jobs:
       - name: Install pinned Rust 1.98.1 and requested target
         working-directory: .
         run: |
-          rustup toolchain install 1.98.1 --profile minimal --component rustfmt clippy llvm-tools --target '${{ matrix.target }}'
+          rustup toolchain install 1.98.1 --profile minimal --target '${{ matrix.target }}'
           rustup run 1.98.1 rustc --version
       - name: Check Windhawk core crates
         run: |
