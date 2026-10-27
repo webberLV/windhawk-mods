@@ -2,12 +2,12 @@
 // @id              dockit
 // @name            DockIt
 // @description     DockIt window capture, cropping, attachment, title-bar auto-hide and restoration
-// @version         0.5.3
+// @version         0.5.4
 // @author          Local
 // @include         windhawk.exe
 // @include         windhawk-mod-uiaccess.exe
 // @include         windhawk-mod.exe
-// @compilerOptions -DWIN32_LEAN_AND_MEAN -lgdiplus -lgdi32
+// @compilerOptions -DWIN32_LEAN_AND_MEAN -lgdiplus -lgdi32 -lshell32
 // @license         GPL-3.0
 // ==/WindhawkMod==
 
@@ -70,6 +70,8 @@ Only select windows you control. Do not embed Explorer or system-critical UI.
 
 #include <windows.h>
 #include <windowsx.h>
+#include <propidl.h>
+#include <shellapi.h>
 #include <gdiplus.h>
 #include <atomic>
 #include <cwchar>
@@ -379,10 +381,10 @@ void DrawButton(Gdiplus::Graphics& g, RECT rect, const wchar_t* label,
     Gdiplus::SolidBrush fill(back);
     Gdiplus::Pen edge(accent ? Gdiplus::Color(255, 65, 207, 214)
                              : Gdiplus::Color(255, 69, 85, 94), 1.0f);
-    g.FillRectangle(&fill, rect.left, rect.top,
-                    rect.right - rect.left, rect.bottom - rect.top);
-    g.DrawRectangle(&edge, rect.left, rect.top,
-                    rect.right - rect.left - 1, rect.bottom - rect.top - 1);
+    g.FillRectangle(&fill, Gdiplus::Rect(static_cast<int>(rect.left), static_cast<int>(rect.top),
+                    static_cast<int>(rect.right - rect.left), static_cast<int>(rect.bottom - rect.top)));
+    g.DrawRectangle(&edge, Gdiplus::Rect(static_cast<int>(rect.left), static_cast<int>(rect.top),
+                    static_cast<int>(rect.right - rect.left - 1), static_cast<int>(rect.bottom - rect.top - 1)));
     PaintLabel(g, label, Gdiplus::RectF(static_cast<float>(rect.left),
              static_cast<float>(rect.top), static_cast<float>(rect.right-rect.left),
              static_cast<float>(rect.bottom-rect.top)), 12, true,
@@ -480,7 +482,8 @@ void PaintMain(HWND hwnd) {
         if (selected) {
             Gdiplus::SolidBrush fill(stateColor);
             RECT r = hit[i].rect;
-            g.FillRectangle(&fill, r.left, r.top, r.right-r.left, r.bottom-r.top);
+            g.FillRectangle(&fill, Gdiplus::Rect(static_cast<int>(r.left), static_cast<int>(r.top),
+                            static_cast<int>(r.right-r.left), static_cast<int>(r.bottom-r.top)));
             PaintLabel(g, hit[i].label,
                 Gdiplus::RectF(static_cast<float>(r.left), static_cast<float>(r.top),
                                static_cast<float>(r.right-r.left), static_cast<float>(r.bottom-r.top)),
@@ -602,10 +605,10 @@ LRESULT CALLBACK OverlayWndProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
         int y2 = std::max(g_dragStart.y, g_dragEnd.y);
         RECT overlayClient{};
         GetClientRect(hwnd, &overlayClient);
-        x1 = std::clamp(x1, 0, overlayClient.right);
-        x2 = std::clamp(x2, 0, overlayClient.right);
-        y1 = std::clamp(y1, 0, overlayClient.bottom);
-        y2 = std::clamp(y2, 0, overlayClient.bottom);
+        x1 = std::clamp(x1, 0, static_cast<int>(overlayClient.right));
+        x2 = std::clamp(x2, 0, static_cast<int>(overlayClient.right));
+        y1 = std::clamp(y1, 0, static_cast<int>(overlayClient.bottom));
+        y2 = std::clamp(y2, 0, static_cast<int>(overlayClient.bottom));
         if (x2-x1 >= 80 && y2-y1 >= 60) {
             g_cropX = x1;
             g_cropY = y1;
