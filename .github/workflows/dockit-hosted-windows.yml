@@ -1,0 +1,132 @@
+name: DockIt hosted Windows build and Windhawk core validation
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [dockit/hosted-windows-ci]
+    paths:
+      - mods/dockit.wh.cpp
+      - .github/workflows/dockit-hosted-windows.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - mods/dockit.wh.cpp
+      - .github/workflows/dockit-hosted-windows.yml
+
+permissions:
+  contents: read
+
+jobs:
+  dockit-mod:
+    name: DockIt — Windhawk Clang (all architectures)
+    runs-on: windows-2025
+    timeout-minutes: 40
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Checkout DockIt source
+        uses: actions/checkout@v4
+
+      - name: Install official Windhawk 2.0 alpha.8 with compiler
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $url = 'https://github.com/ramensoftware/windhawk/releases/download/2.0.0-alpha.8/windhawk_setup.exe'
+          $installer = Join-Path $env:RUNNER_TEMP 'windhawk_setup.exe'
+          $install = Join-Path $env:RUNNER_TEMP 'windhawk-portable'
+          Invoke-WebRequest -Uri $url -OutFile $installer
+          $process = Start-Process -FilePath $installer -ArgumentList @('/S', '/PORTABLE', '/DEVTOOLS', "/D=$install") -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Windhawk installer exited $($process.ExitCode)" }
+          $cli = Join-Path $install 'windhawk-cli.exe'
+          $clang = Join-Path $install 'Compiler\bin\clang++.exe'
+          if (-not (Test-Path $cli)) { throw "Missing CLI at $cli" }
+          if (-not (Test-Path $clang)) { throw "Missing Clang at $clang" }
+          & $clang --version
+
+      - name: Compile DockIt with Windhawk CLI for all supported targets
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $install = Join-Path $env:RUNNER_TEMP 'windhawk-portable'
+          $cli = Join-Path $install 'windhawk-cli.exe'
+          $source = Join-Path $env:GITHUB_WORKSPACE 'mods\dockit.wh.cpp'
+          $stdout = Join-Path $env:RUNNER_TEMP 'dockit-result.json'
+          $stderr = Join-Path $env:RUNNER_TEMP 'dockit-compiler-stderr.log'
+          & $cli --json mod install --disabled --arch all --file $source 1> $stdout 2> $stderr
+          $exitCode = $LASTEXITCODE
+          if (Test-Path $stdout) { Get-Content $stdout }
+          if (Test-Path $stderr) { Get-Content $stderr }
+          if ($exitCode -ne 0) { throw "Windhawk compiler exited $exitCode" }
+          $response = Get-Content $stdout -Raw | ConvertFrom-Json
+          if ($response.error) { throw "Windhawk error: $($response.error | ConvertTo-Json -Compress)" }
+          if ($response.data.warnings) { throw "Compiler warnings: $($response.data.warnings)" }
+          $outDir = Join-Path $env:RUNNER_TEMP 'dockit-build-output'
+          New-Item -ItemType Directory -Path $outDir -Force | Out-Null
+          Get-ChildItem -Path $install -Filter 'dockit_*.dll' -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+            Copy-Item $_.FullName -Destination (Join-Path $outDir ("$($_.Directory.Name)-$($_.Name)"))
+          }
+          "Windhawk all-architecture compilation succeeded." | Set-Content (Join-Path $outDir 'result.txt')
+
+      - name: Upload compiler diagnostics and found DLLs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dockit-windows-build
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/dockit-result.json
+            ${{ runner.temp }}/dockit-compiler-stderr.log
+            ${{ runner.temp }}/dockit-build-output/
+
+  windhawk-core:
+    name: Windhawk Rust core — ${{ matrix.target }}
+    runs-on: windows-2025
+    timeout-minutes: 75
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - x86_64-pc-windows-msvc
+          - i686-pc-windows-msvc
+          - aarch64-pc-windows-msvc
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windhawk-source/src/windhawk-core
+    steps:
+      - name: Checkout pinned Windhawk source
+        uses: actions/checkout@v4
+        with:
+          repository: ramensoftware/windhawk
+          ref: 7413a57a3f964a6e0e11f491f388da103d947a5d
+          path: windhawk-source
+      - name: Install pinned Rust 1.98.1 and requested target
+        working-directory: .
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --component rustfmt clippy llvm-tools --target '${{ matrix.target }}'
+          rustup run 1.98.1 rustc --version
+      - name: Check Windhawk core crates
+        run: |
+          cargo +1.98.1 check --locked --workspace --exclude windhawk-ui --target '${{ matrix.target }}'
+
+  windhawk-ui:
+    name: Windhawk Tauri UI — x64
+    runs-on: windows-2025
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: pwsh
+        working-directory: windhawk-source/src/windhawk-core
+    steps:
+      - name: Checkout pinned Windhawk source
+        uses: actions/checkout@v4
+        with:
+          repository: ramensoftware/windhawk
+          ref: 7413a57a3f964a6e0e11f491f388da103d947a5d
+          path: windhawk-source
+      - name: Install pinned Rust
+        working-directory: .
+        run: |
+          rustup toolchain install 1.98.1 --profile minimal --target x86_64-pc-windows-msvc
+      - name: Check Windhawk UI
+        run: |
+          cargo +1.98.1 check --locked -p windhawk-ui --target x86_64-pc-windows-msvc
