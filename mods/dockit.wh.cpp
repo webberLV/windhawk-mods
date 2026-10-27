@@ -7,7 +7,7 @@
 // @include         windhawk.exe
 // @include         windhawk-mod-uiaccess.exe
 // @include         windhawk-mod.exe
-// @compilerOptions -DWIN32_LEAN_AND_MEAN -lgdiplus -lgdi32 -lshell32
+// @compilerOptions -DWIN32_LEAN_AND_MEAN -lgdiplus -lgdi32 -lshell32 -ladvapi32
 // @license         GPL-3.0
 // ==/WindhawkMod==
 
