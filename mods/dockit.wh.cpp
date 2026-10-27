@@ -2,7 +2,7 @@
 // @id              dockit
 // @name            DockIt
 // @description     DockIt window capture, cropping, attachment, title-bar auto-hide and restoration
-// @version         0.5.5
+// @version         0.5.6
 // @author          Local
 // @include         windhawk.exe
 // @include         windhawk-mod-uiaccess.exe
@@ -15,8 +15,11 @@
 /*
 # DockIt from scratch - Windhawk 2.0 source
 
-Runs as a Windhawk 2.0 native tool mod. The UIAccess host is preferred;
-Windhawk can fall back to its standard host where UIAccess is unavailable.
+Runs as a Windhawk 2.0 native tool mod. Windhawk is responsible for choosing
+and launching its UIAccess or standard tool host. DockIt cannot grant itself
+UIAccess: it only reads TokenUIAccess and TokenIntegrityLevel from its own
+process token and logs the effective host permissions on startup. If a target
+window refuses attachment, check the Windhawk log for the host token context.
 The windhawk.exe include entry provides metadata compatibility; it does not
 start a separate windhawk.exe process or inject the UI into Explorer.
 Windhawk chooses the host and compiles for the target system. There are no
@@ -214,6 +217,43 @@ void SetStatus(const wchar_t* message) {
     if (HWND h = g_main.load()) InvalidateRect(h, nullptr, FALSE);
 }
 
+// Observe the effective Windhawk tool-host token. Windhawk's process launcher,
+// not this mod, creates UIAccess-capable host processes. We never change any
+// privilege, impersonate SYSTEM, or attempt SetTokenInformation here.
+void LogHostTokenSecurity() {
+    HANDLE token = nullptr;
+    if (!OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        Wh_Log(L"DockIt: cannot query Windhawk host token (error=%lu)", GetLastError());
+        return;
+    }
+
+    DWORD uiAccess = 0;
+    DWORD returned = 0;
+    BOOL uiAccessKnown = GetTokenInformation(
+        token, TokenUIAccess, &uiAccess, sizeof(uiAccess), &returned);
+
+    alignas(TOKEN_MANDATORY_LABEL) BYTE labelStorage[
+        sizeof(TOKEN_MANDATORY_LABEL) + SECURITY_MAX_SID_SIZE]{};
+    BOOL integrityKnown = GetTokenInformation(
+        token, TokenIntegrityLevel, labelStorage, sizeof(labelStorage), &returned);
+    DWORD integrityRid = 0;
+    if (integrityKnown) {
+        const auto* label = reinterpret_cast<const TOKEN_MANDATORY_LABEL*>(labelStorage);
+        PSID sid = label->Label.Sid;
+        if (sid && IsValidSid(sid) && *GetSidSubAuthorityCount(sid) != 0) {
+            integrityRid = *GetSidSubAuthority(sid, *GetSidSubAuthorityCount(sid) - 1);
+        } else {
+            integrityKnown = FALSE;
+        }
+    }
+    CloseHandle(token);
+
+    Wh_Log(L"DockIt: effective host token: UIAccess=%lu (known=%lu), "
+           L"integrity RID=0x%lx (known=%lu)",
+           uiAccess, static_cast<DWORD>(uiAccessKnown != FALSE),
+           integrityRid, static_cast<DWORD>(integrityKnown != FALSE));
+}
+
 // All embedded-window operations below execute only on the UI thread.
 void MoveEmbeddedWindow() {
     if (!g_attached || !g_target || !IsWindow(g_target)) return;
@@ -346,7 +386,7 @@ void AttachTarget() {
         if (!g_oldVisible) ShowWindow(g_target, SW_HIDE);
         else if (!IsWindowVisible(g_target)) ShowWindow(g_target, SW_SHOWNOACTIVATE);
         Wh_Log(L"DockIt: SetParent failed: %lu", error);
-        SetStatus(L"SetParent failed; check DPI awareness and permissions.");
+        SetStatus(L"SetParent failed; check DPI, permissions, and host UIAccess log.");
         return;
     }
     g_attached = true;
@@ -1026,6 +1066,7 @@ BOOL WhTool_ModInit() {
         return FALSE;
     }
     Wh_Log(L"DockIt tool host initialized, PID=%lu", GetCurrentProcessId());
+    LogHostTokenSecurity();
     return TRUE;
 }
 
