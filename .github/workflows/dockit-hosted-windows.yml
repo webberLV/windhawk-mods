@@ -61,10 +61,35 @@ jobs:
           if ($response.data.warnings) { throw "Compiler warnings: $($response.data.warnings)" }
           $outDir = Join-Path $env:RUNNER_TEMP 'dockit-build-output'
           New-Item -ItemType Directory -Path $outDir -Force | Out-Null
-          Get-ChildItem -Path $install -Filter 'dockit_*.dll' -File -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-            Copy-Item $_.FullName -Destination (Join-Path $outDir ("$($_.Directory.Name)-$($_.Name)"))
+          # Windhawk's core stores compiled DLLs in <AppDataPath>/Engine/Mods,
+          # not necessarily inside the installation tree. File installs are
+          # named "local@dockit_...", so looking for "dockit_*.dll" misses them.
+          $dllName = [string]$response.data.config.libraryFileName
+          if (-not $response.success -or -not $response.data.compiledLocally -or
+              [string]::IsNullOrWhiteSpace($dllName)) {
+            throw 'Windhawk CLI did not report a successful local compilation and DLL name.'
           }
-          "Windhawk all-architecture compilation succeeded." | Set-Content (Join-Path $outDir 'result.txt')
+          $iniFile = Join-Path $install 'windhawk.ini'
+          $storageLine = Get-Content $iniFile | Where-Object {
+            $_ -match '^\s*AppDataPath\s*='
+          } | Select-Object -Last 1
+          if (-not $storageLine) { throw "AppDataPath missing from $iniFile" }
+          $rawAppData = ($storageLine -split '=', 2)[1].Trim()
+          $appDataPath = [Environment]::ExpandEnvironmentVariables($rawAppData)
+          if (-not [IO.Path]::IsPathRooted($appDataPath)) {
+            $appDataPath = Join-Path $install $appDataPath
+          }
+          $modsDir = Join-Path ([IO.Path]::GetFullPath($appDataPath)) 'Engine\Mods'
+          Write-Host "Windhawk compiled DLL directory: $modsDir"
+          foreach ($arch in @('32', '64', 'arm64')) {
+            $dllPath = Join-Path (Join-Path $modsDir $arch) $dllName
+            if (-not (Test-Path -LiteralPath $dllPath -PathType Leaf)) {
+              throw "Missing compiled $arch DLL at $dllPath"
+            }
+            Copy-Item -LiteralPath $dllPath -Destination (Join-Path $outDir "dockit-0.5.6-$arch.dll")
+          }
+          Copy-Item -LiteralPath $source -Destination (Join-Path $outDir 'dockit.wh.cpp')
+          "Windhawk x86, x64 and ARM64 DLL builds verified and packaged." | Set-Content (Join-Path $outDir 'result.txt')
 
       - name: Upload compiler diagnostics and found DLLs
         if: always()
