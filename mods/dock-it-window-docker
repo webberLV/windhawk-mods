@@ -1,0 +1,355 @@
+// ==WindhawkMod==
+// @id             dock-it-window-docker
+// @name           Dock It
+// @description    This mod allows you to resize and dock windows to the sides of your monitor ( only prime monitor atm )
+// @version        1
+// @author          webberlvb
+// @github          https://github.com/webberlv
+// @include        windhawk.exe
+// @compilerOptions -lcomdlg32
+// @license         MIT
+// ==/WindhawkMod==
+
+// ==WindhawkModReadme==
+/*
+# Your Awesome Mod
+This is a place for useful information about your mod. Use it to describe the
+mod, explain why it's useful, and add any other relevant details. You can use
+[Markdown](https://en.wikipedia.org/wiki/Markdown) to add links and
+**formatting** to the readme.
+
+This short sample customizes Microsoft Paint by forcing it to use just a single
+color, and by blocking file opening. To see the mod in action:
+- Compile the mod with the button on the left or with Ctrl+B.
+- Run Microsoft Paint from the start menu (type "Paint") or by running
+  mspaint.exe.
+- Draw something and notice that the orange color is always used, regardless of
+  the color you pick.
+- Try opening a file and notice that it's blocked.
+How to use.
+
+User experience
+1. Change the hotkeys.
+2. Run the mod.
+3. Press your hotkey.
+4. Follow the instructions in the tooltip.
+
+5. Drag the new window to the edges of your main monitor and release. You should hear a beep when it docks.
+6. move you cursor away from from the window to collapse it down, move over it again to expand it.
+7. Right click on the window ( in a empty space or on the tab ) while it is docked to toggle its lock. It has 3 states ( Green , Yellow , Red ).
+
+8. Close the window to set your window back to normal ( use this to adjust your size )
+
+How it works: original window but it is made a child of another window.
+
+It works by putting a window inside another window and then putting that window in yet another window.
+
+Grandparent window > Parent Window ( the size you had set ) > Child window ( your target window )
+4 layers instead of 3 ( Great-Grandparents / Great-Grandchildren )
+ 
+
+Dev testlist
+Testing
+Exercise the real path. taskkill /f /im explorer.exe and Task Manager's "End task" terminate the process without running anything, so they do not test this. Use a graceful exit instead: Ctrl+Shift+right-click on the taskbar and choose "Exit Explorer", or sign out, or reboot.
+Watch for: a sign-out that hangs, a crash dialog or a WerFault.exe process at exit, or a shell that does not come back. All are typical symptoms of a destructor misbehaving at shutdown.
+Test the unload path separately. Disable and re-enable the mod a number of times, and check in Task Manager (with the Handles and Threads columns enabled) that the host's handle and thread counts return to their baseline. This is what catches an explicit cleanup that was forgotten after adding [[clang::no_destroy]].
+Checklist
+For every global, static, and thread_local with a non-trivial destructor: can it block, crash, or does it need a specific thread? If none of those, leave it alone.
+If any of those: [[clang::no_destroy]], plus an explicit release in Wh_ModUninit.
+std::optional<T> wrapper by default; bare attribute only for nullable / handle-like types.
+The explicit release must fully free (reset(), = nullptr, join(), CloseHandle) and run on the owning thread for thread-affine objects.
+Every thread the mod started must be stopped and joined before WhTool_ModUninit returns.
+No [[clang::no_destroy]] on a type that does not need it.
+
+
+
+# Getting started
+Check out the documentation
+[here](https://github.com/ramensoftware/windhawk/wiki/Creating-a-new-mod).
+*/
+// ==/WindhawkModReadme==
+
+// ==WindhawkModSettings==
+/*
+# Here you can define settings, in YAML format, that the mod users will be able
+# to configure. Metadata values such as $name and $description are optional.
+# Check out the documentation for more information:
+# https://github.com/ramensoftware/windhawk/wiki/Creating-a-new-mod#settings
+- color:
+  - red: 255
+  - green: 127
+  - blue: 39
+  $name: Custom color
+  $description: This color will be used regardless of the selected color.
+- blockOpen: true
+  $name: Block opening files
+  $description: When enabled, opening files in Paint is not allowed.
+*/
+// ==/WindhawkModSettings==
+
+// The source code of the mod starts here. This sample was inspired by the great
+// article of Kyle Halladay, X64 Function Hooking by Example:
+// https://kylehalladay.com/blog/2020/11/13/Hooking-By-Example.html
+// If you're new to terms such as code injection and function hooking, the
+// article is great to get started.
+
+#include <gdiplus.h>
+
+using namespace Gdiplus;
+
+struct {
+    BYTE red;
+    BYTE green;
+    BYTE blue;
+    bool blockOpen;
+} settings;
+
+using GdipSetSolidFillColor_t = decltype(&DllExports::GdipSetSolidFillColor);
+GdipSetSolidFillColor_t GdipSetSolidFillColor_Original;
+GpStatus WINAPI GdipSetSolidFillColor_Hook(GpSolidFill* brush, ARGB color) {
+    Wh_Log(L"GdipSetSolidFillColor_Hook: color=%08X", color);
+
+    // If the color is not transparent, replace it.
+    if (Color(color).GetAlpha() == 255) {
+        color =
+            Color::MakeARGB(255, settings.red, settings.green, settings.blue);
+    }
+
+    // Call the original function.
+    return GdipSetSolidFillColor_Original(brush, color);
+}
+
+using GetOpenFileNameW_t = decltype(&GetOpenFileNameW);
+GetOpenFileNameW_t GetOpenFileNameW_Original;
+BOOL WINAPI GetOpenFileNameW_Hook(LPOPENFILENAMEW params) {
+    Wh_Log(L"GetOpenFileNameW_Hook");
+
+    if (settings.blockOpen) {
+        // Forbid the operation and return without calling the original
+        // function.
+        MessageBoxW(GetActiveWindow(), L"Opening files is forbidden",
+                    L"Surprise!", MB_OK);
+        return FALSE;
+    }
+
+    return GetOpenFileNameW_Original(params);
+}
+
+void LoadSettings() {
+    settings.red = Wh_GetIntSetting(L"color.red");
+    settings.green = Wh_GetIntSetting(L"color.green");
+    settings.blue = Wh_GetIntSetting(L"color.blue");
+    settings.blockOpen = Wh_GetIntSetting(L"blockOpen");
+}
+
+// The mod is being initialized, load settings, hook functions, and do other
+// initialization stuff if required.
+BOOL WhTool_ModInit() {
+    Wh_Log(L"Init");
+
+    LoadSettings();
+
+    HMODULE gdiPlusModule = LoadLibrary(L"gdiplus.dll");
+    GdipSetSolidFillColor_t GdipSetSolidFillColor =
+        (GdipSetSolidFillColor_t)GetProcAddress(gdiPlusModule,
+                                                "GdipSetSolidFillColor");
+
+    Wh_SetFunctionHook((void*)GdipSetSolidFillColor,
+                       (void*)GdipSetSolidFillColor_Hook,
+                       (void**)&GdipSetSolidFillColor_Original);
+
+    Wh_SetFunctionHook((void*)GetOpenFileNameW, (void*)GetOpenFileNameW_Hook,
+                       (void**)&GetOpenFileNameW_Original);
+
+    return TRUE;
+}
+
+// The mod is being unloaded, free all allocated resources.
+void WhTool_ModUninit() {
+    Wh_Log(L"Uninit");
+}
+
+// The mod setting were changed, reload them.
+void WhTool_ModSettingsChanged() {
+    Wh_Log(L"SettingsChanged");
+
+    LoadSettings();
+}
+-
+// Windhawk tool mod implementation for mods which don't need to inject to other
+// processes or hook other functions. Context:
+// https://github.com/ramensoftware/windhawk/wiki/Mods-as-tools:-Running-mods-in-a-dedicated-process
+//
+// The mod will load and run in a dedicated windhawk.exe process.
+//
+// Paste the code below as part of the mod code, and use these callbacks:
+// * WhTool_ModInit
+// * WhTool_ModSettingsChanged
+// * WhTool_ModUninit
+//
+// Currently, other callbacks are not supported.
+
+bool g_isToolModProcessLauncher;
+HANDLE g_toolModProcessMutex;
+
+void WINAPI EntryPoint_Hook() {
+    Wh_Log(L">");
+    ExitThread(0);
+}
+
+BOOL Wh_ModInit() {
+    DWORD sessionId;
+    if (ProcessIdToSessionId(GetCurrentProcessId(), &sessionId) &&
+        sessionId == 0) {
+        return FALSE;
+    }
+
+    bool isExcluded = false;
+    bool isToolModProcess = false;
+    bool isCurrentToolModProcess = false;
+    int argc;
+    LPWSTR* argv = CommandLineToArgvW(GetCommandLine(), &argc);
+    if (!argv) {
+        Wh_Log(L"CommandLineToArgvW failed");
+        return FALSE;
+    }
+
+    for (int i = 1; i < argc; i++) {
+        if (wcscmp(argv[i], L"-service") == 0 ||
+            wcscmp(argv[i], L"-service-start") == 0 ||
+            wcscmp(argv[i], L"-service-stop") == 0) {
+            isExcluded = true;
+            break;
+        }
+    }
+
+    for (int i = 1; i < argc - 1; i++) {
+        if (wcscmp(argv[i], L"-tool-mod") == 0) {
+            isToolModProcess = true;
+            if (wcscmp(argv[i + 1], WH_MOD_ID) == 0) {
+                isCurrentToolModProcess = true;
+            }
+            break;
+        }
+    }
+
+    LocalFree(argv);
+
+    if (isExcluded) {
+        return FALSE;
+    }
+
+    if (isCurrentToolModProcess) {
+        g_toolModProcessMutex =
+            CreateMutex(nullptr, TRUE, L"windhawk-tool-mod_" WH_MOD_ID);
+        if (!g_toolModProcessMutex) {
+            Wh_Log(L"CreateMutex failed");
+            ExitProcess(1);
+        }
+
+        if (GetLastError() == ERROR_ALREADY_EXISTS) {
+            Wh_Log(L"Tool mod already running (%s)", WH_MOD_ID);
+            ExitProcess(1);
+        }
+
+        if (!WhTool_ModInit()) {
+            ExitProcess(1);
+        }
+
+        IMAGE_DOS_HEADER* dosHeader =
+            (IMAGE_DOS_HEADER*)GetModuleHandle(nullptr);
+        IMAGE_NT_HEADERS* ntHeaders =
+            (IMAGE_NT_HEADERS*)((BYTE*)dosHeader + dosHeader->e_lfanew);
+
+        DWORD entryPointRVA = ntHeaders->OptionalHeader.AddressOfEntryPoint;
+        void* entryPoint = (BYTE*)dosHeader + entryPointRVA;
+
+        Wh_SetFunctionHook(entryPoint, (void*)EntryPoint_Hook, nullptr);
+        return TRUE;
+    }
+
+    if (isToolModProcess) {
+        return FALSE;
+    }
+
+    g_isToolModProcessLauncher = true;
+    return TRUE;
+}
+
+void Wh_ModAfterInit() {
+    if (!g_isToolModProcessLauncher) {
+        return;
+    }
+
+    WCHAR currentProcessPath[MAX_PATH];
+    switch (GetModuleFileName(nullptr, currentProcessPath,
+                              ARRAYSIZE(currentProcessPath))) {
+        case 0:
+        case ARRAYSIZE(currentProcessPath):
+            Wh_Log(L"GetModuleFileName failed");
+            return;
+    }
+
+    WCHAR
+    commandLine[MAX_PATH + 2 +
+                (sizeof(L" -tool-mod \"" WH_MOD_ID "\"") / sizeof(WCHAR)) - 1];
+    swprintf_s(commandLine, L"\"%s\" -tool-mod \"%s\"", currentProcessPath,
+               WH_MOD_ID);
+
+    HMODULE kernelModule = GetModuleHandle(L"kernelbase.dll");
+    if (!kernelModule) {
+        kernelModule = GetModuleHandle(L"kernel32.dll");
+        if (!kernelModule) {
+            Wh_Log(L"No kernelbase.dll/kernel32.dll");
+            return;
+        }
+    }
+
+    using CreateProcessInternalW_t = BOOL(WINAPI*)(
+        HANDLE hUserToken, LPCWSTR lpApplicationName, LPWSTR lpCommandLine,
+        LPSECURITY_ATTRIBUTES lpProcessAttributes,
+        LPSECURITY_ATTRIBUTES lpThreadAttributes, WINBOOL bInheritHandles,
+        DWORD dwCreationFlags, LPVOID lpEnvironment, LPCWSTR lpCurrentDirectory,
+        LPSTARTUPINFOW lpStartupInfo,
+        LPPROCESS_INFORMATION lpProcessInformation,
+        PHANDLE hRestrictedUserToken);
+    CreateProcessInternalW_t pCreateProcessInternalW =
+        (CreateProcessInternalW_t)GetProcAddress(kernelModule,
+                                                 "CreateProcessInternalW");
+    if (!pCreateProcessInternalW) {
+        Wh_Log(L"No CreateProcessInternalW");
+        return;
+    }
+
+    STARTUPINFO si{
+        .cb = sizeof(STARTUPINFO),
+        .dwFlags = STARTF_FORCEOFFFEEDBACK,
+    };
+    PROCESS_INFORMATION pi;
+    if (!pCreateProcessInternalW(nullptr, currentProcessPath, commandLine,
+                                 nullptr, nullptr, FALSE, NORMAL_PRIORITY_CLASS,
+                                 nullptr, nullptr, &si, &pi, nullptr)) {
+        Wh_Log(L"CreateProcess failed");
+        return;
+    }
+
+    CloseHandle(pi.hProcess);
+    CloseHandle(pi.hThread);
+}
+
+void Wh_ModSettingsChanged() {
+    if (g_isToolModProcessLauncher) {
+        return;
+    }
+
+    WhTool_ModSettingsChanged();
+}
+
+void Wh_ModUninit() {
+    if (g_isToolModProcessLauncher) {
+        return;
+    }
+
+    WhTool_ModUninit();
+    ExitProcess(0);
+}
