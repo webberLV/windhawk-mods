@@ -3,7 +3,7 @@
 // @name           Dock It
 // @description    This mod allows you to resize and dock windows to the sides of your monitor ( only prime monitor atm )
 // @version        1
-// @author          webberlvb
+// @author          webberlv
 // @github          https://github.com/webberlv
 // @include        windhawk.exe
 // @compilerOptions -lcomdlg32
@@ -38,6 +38,11 @@ User experience
 6. move you cursor away from from the window to collapse it down, move over it again to expand it.
 7. Right click on the window ( in a empty space or on the tab ) while it is docked to toggle its lock. It has 3 states ( Green , Yellow , Red ).
 
+Afaics,
+Green = window collapses to title bar, when you move mouse away - expands again, if you move mouse over title bar
+Yellow = window stays expanded
+Red = window collapses to title bar, when you move mouse away - but it is locked, and only expands again when you right-click on the title bar (state turns green).
+Yes that is correct. You can right-click on any area of the window that doesn't have a control on it or your captured window. If you have good eyesight and mouse control you can click on the area directly under the title bar.
 8. Close the window to set your window back to normal ( use this to adjust your size )
 
 How it works: original window but it is made a child of another window.
